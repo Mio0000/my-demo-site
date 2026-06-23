@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tradie 営業ボード</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .filter-btn.active { background:#1d4ed8; color:#fff; border-color:#1d4ed8; }
+    .tab-btn { border-bottom: 2px solid transparent; padding-bottom: 4px; }
+    .tab-btn.tab-active { border-color:#1d4ed8; color:#1d4ed8; font-weight:600; }
+  </style>
+  <script defer src="/_vercel/insights/script.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <!-- ヘッダー -->
+  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-4 py-5 shadow">
+    <div class="max-w-5xl mx-auto">
+      <h1 class="text-2xl font-bold tracking-tight">🔧 Tradie 営業ボード</h1>
+      <p class="text-slate-300 text-sm mt-0.5">営業先リスト ／ サイトなし・旧サイト抽出</p>
+      <div class="mt-3 flex flex-wrap gap-3 text-sm">
+        <span class="bg-white/20 rounded-full px-3 py-1">全 <strong id="totalCount">—</strong> 件</span>
+        <span class="bg-white/20 rounded-full px-3 py-1">表示中 <strong id="visibleCount">—</strong> 件</span>
+        <span class="bg-green-400/30 rounded-full px-3 py-1">連絡済み <strong id="sentCount">0</strong> 件</span>
+        <button onclick="restoreAll()"
+          class="bg-white/20 hover:bg-white/30 rounded-full px-3 py-1 text-xs transition">
+          🔄 削除済みを復元
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- フィルター -->
+  <div class="max-w-5xl mx-auto px-4 pt-4 space-y-2">
+
+    <!-- エリア -->
+    <div class="flex flex-wrap gap-2 items-center">
+      <span class="text-xs text-gray-400 font-semibold w-10">エリア</span>
+      <button onclick="setLocation('all')" data-val="all"
+        class="filter-btn loc-btn active px-3 py-1.5 rounded-full text-sm font-medium border transition">
+        すべて
+      </button>
+      <span id="loc-buttons"></span>
+    </div>
+
+    <!-- 業種 -->
+    <div class="flex flex-wrap gap-2 items-center">
+      <span class="text-xs text-gray-400 font-semibold w-10">業種</span>
+      <button onclick="setCategory('all')" data-val="all"
+        class="filter-btn cat-btn active px-3 py-1.5 rounded-full text-sm font-medium border transition">
+        すべて
+      </button>
+      <span id="cat-buttons"></span>
+    </div>
+
+    <!-- チェックボックス + タブ -->
+    <div class="flex flex-wrap items-center gap-4 pb-2 border-b border-gray-200">
+      <label class="flex items-center gap-2 text-sm cursor-pointer select-none">
+        <input type="checkbox" id="noWebOnly" onchange="render()"
+          class="w-4 h-4 accent-blue-600 cursor-pointer">
+        <span class="text-gray-700 font-medium">🚨 サイトなしのみ</span>
+      </label>
+      <div class="flex gap-4 ml-auto text-sm">
+        <button id="tab-unsent" onclick="setTab('unsent')"
+          class="tab-btn tab-active text-blue-600">
+          未連絡 (<span id="unsentCount">0</span>)
+        </button>
+        <button id="tab-sent" onclick="setTab('sent')"
+          class="tab-btn text-gray-400">
+          連絡済み (<span id="sentCountTab">0</span>)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- カードグリッド -->
+  <div class="max-w-5xl mx-auto px-4 py-4">
+    <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div class="col-span-3 text-center py-20 text-gray-400 text-sm">読み込み中...</div>
+    </div>
+  </div>
+
+  <script>
+    let SERVICES = [];
+    let currentCategory = 'all';
+    let currentLocation  = 'all';
+    let currentTab = 'unsent';
+    const SENT_KEY    = 'tradie_sent_v1';
+    const DELETED_KEY = 'tradie_deleted_v1';
+
+    const CAT_COLORS = {
+      'Plumber':       'bg-blue-100 text-blue-800',
+      'Electrician':   'bg-yellow-100 text-yellow-800',
+      'Roofing':       'bg-orange-100 text-orange-800',
+      'HVAC':          'bg-cyan-100 text-cyan-800',
+      'Landscaping':   'bg-green-100 text-green-800',
+      'Pest Control':  'bg-red-100 text-red-800',
+      'Cafe':          'bg-amber-100 text-amber-800',
+      'カフェ':         'bg-amber-100 text-amber-800',
+      'Hair Salon':    'bg-pink-100 text-pink-800',
+      '美容室':         'bg-pink-100 text-pink-800',
+      'Florist':       'bg-lime-100 text-lime-800',
+      'フラワーショップ': 'bg-lime-100 text-lime-800',
+      'Pet Grooming':  'bg-purple-100 text-purple-800',
+      'ペットサロン':    'bg-purple-100 text-purple-800',
+      'Vet':           'bg-indigo-100 text-indigo-800',
+      '動物病院':       'bg-indigo-100 text-indigo-800',
+      'Music School':  'bg-violet-100 text-violet-800',
+      'Dentist':       'bg-sky-100 text-sky-800',
+      'Builder':       'bg-orange-100 text-orange-800',
+      'Chiropractor':  'bg-teal-100 text-teal-800',
+      'Yoga Studio':   'bg-emerald-100 text-emerald-800',
+      '接骨院・整体':   'bg-teal-100 text-teal-800',
+    };
+
+    const STATUS_INFO = {
+      no_website:  { badge: '🚨 サイトなし',    cls: 'bg-red-100 text-red-700' },
+      old_website: { badge: '⚠️ 旧サイト',      cls: 'bg-orange-100 text-orange-700' },
+      has_website: { badge: 'サイトあり',        cls: 'bg-gray-100 text-gray-500' },
+    };
+
+    /* ---------- localStorage helpers ---------- */
+    function getSent()    { return new Set(JSON.parse(localStorage.getItem(SENT_KEY)    || '[]')); }
+    function saveSent(s)  { localStorage.setItem(SENT_KEY,    JSON.stringify([...s])); }
+    function getDeleted() { return new Set(JSON.parse(localStorage.getItem(DELETED_KEY) || '[]')); }
+    function saveDeleted(s) { localStorage.setItem(DELETED_KEY, JSON.stringify([...s])); }
+
+    /* ---------- helpers ---------- */
+    function mapsUrl(s) {
+      if (s.googleMapsUrl) return s.googleMapsUrl;
+      return 'https://www.google.com/maps/search/' + encodeURIComponent(s.name + ' ' + s.suburb);
+    }
+
+    function starsHtml(rating, reviewCount) {
+      if (!rating) return '<span class="text-gray-400 text-xs">評価なし</span>';
+      const full  = Math.floor(rating);
+      const empty = 5 - full;
+      return `<span class="text-yellow-400 text-sm">${'★'.repeat(full)}${'☆'.repeat(empty)}</span>`
+           + `<span class="font-semibold text-gray-700 text-sm ml-1">${rating}</span>`
+           + (reviewCount ? `<span class="text-gray-400 text-xs ml-1">(${reviewCount}件)</span>` : '');
+    }
+
+    /* ---------- card render ---------- */
+    function renderCard(s, sent) {
+      const catColor   = CAT_COLORS[s.category] || 'bg-gray-100 text-gray-700';
+      const isSent     = sent.has(s.id);
+      const si         = STATUS_INFO[s.status] || STATUS_INFO.has_website;
+      const cardBorder = isSent ? 'border-green-300 bg-green-50' : 'border-gray-100 bg-white';
+
+      const builderBtn = s.draftUrl
+        ? `<a href="${s.draftUrl}" target="_blank"
+              class="flex-1 text-center text-sm font-medium bg-blue-600 text-white rounded-xl py-2 hover:bg-blue-700 transition">
+             🔨 Webビルダーを開く
+           </a>`
+        : `<span class="flex-1 text-center text-xs text-gray-400 border border-dashed border-gray-300 rounded-xl py-2 flex items-center justify-center">
+             🔨 未作成
+           </span>`;
+
+      const sentBtn = isSent
+        ? `<button onclick="toggleSent('${s.id}')"
+              class="w-full text-center text-sm font-medium bg-green-500 text-white rounded-xl py-2 hover:bg-green-600 transition">
+             ✅ 連絡済み — 取り消す
+           </button>`
+        : `<button onclick="toggleSent('${s.id}')"
+              class="w-full text-center text-sm font-medium bg-gray-100 text-gray-600 rounded-xl py-2 hover:bg-gray-200 transition">
+             📤 連絡済みにする
+           </button>`;
+
+      return `
+        <div id="card-${s.id}" class="rounded-2xl shadow-sm border ${cardBorder} p-4 flex flex-col gap-3">
+
+          <!-- top row: badges + delete -->
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex flex-wrap gap-1">
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">${s.suburb}</span>
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full ${catColor}">${s.category}</span>
+            </div>
+            <button onclick="deleteCard('${s.id}')"
+              class="text-gray-300 hover:text-red-400 text-xl leading-none font-bold shrink-0" title="削除">×</button>
+          </div>
+
+          <!-- name + rating -->
+          <div>
+            <h2 class="text-base font-bold text-gray-900 leading-snug">${s.name}</h2>
+            <div class="flex items-center mt-1">${starsHtml(s.rating, s.reviewCount)}</div>
+          </div>
+
+          <!-- status + notes -->
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-bold px-2 py-0.5 rounded-full ${si.cls}">${si.badge}</span>
+            ${s.notes ? `<span class="text-xs text-gray-500">${s.notes}</span>` : ''}
+          </div>
+
+          <!-- action buttons -->
+          <div class="flex gap-2 pt-1 mt-auto">
+            ${builderBtn}
+            <a href="${mapsUrl(s)}" target="_blank"
+              class="flex-1 text-center text-sm font-medium bg-slate-100 text-slate-700 rounded-xl py-2 hover:bg-slate-200 transition">
+              🗺 Google Maps
+            </a>
+          </div>
+          <div>${sentBtn}</div>
+        </div>`;
+    }
+
+    /* ---------- render ---------- */
+    function render() {
+      const grid     = document.getElementById('grid');
+      const sent     = getSent();
+      const deleted  = getDeleted();
+      const noWebOnly = document.getElementById('noWebOnly').checked;
+      let shown = 0, unsentTotal = 0, sentTotal = 0;
+      grid.innerHTML = '';
+
+      SERVICES.forEach(s => {
+        if (deleted.has(s.id)) return;
+        if (currentCategory !== 'all' && s.category !== currentCategory) return;
+        if (currentLocation  !== 'all' && s.location !== currentLocation)  return;
+        if (noWebOnly && s.status !== 'no_website') return;
+
+        const isSent = sent.has(s.id);
+        if (isSent) sentTotal++; else unsentTotal++;
+
+        if ((currentTab === 'unsent' && !isSent) || (currentTab === 'sent' && isSent)) {
+          grid.insertAdjacentHTML('beforeend', renderCard(s, sent));
+          shown++;
+        }
+      });
+
+      document.getElementById('unsentCount').textContent  = unsentTotal;
+      document.getElementById('sentCountTab').textContent = sentTotal;
+      document.getElementById('sentCount').textContent    = sentTotal;
+      document.getElementById('visibleCount').textContent = shown;
+
+      if (shown === 0) {
+        grid.innerHTML = '<div class="col-span-3 text-center py-20 text-gray-400 text-sm">該当する業者がありません</div>';
+      }
+    }
+
+    /* ---------- filter setters ---------- */
+    function setCategory(val) {
+      currentCategory = val;
+      document.querySelectorAll('.cat-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.val === val));
+      render();
+    }
+
+    function setLocation(val) {
+      currentLocation = val;
+      document.querySelectorAll('.loc-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.val === val));
+      render();
+    }
+
+    function setTab(tab) {
+      currentTab = tab;
+      document.getElementById('tab-unsent').classList.toggle('tab-active', tab === 'unsent');
+      document.getElementById('tab-unsent').classList.toggle('text-blue-600', tab === 'unsent');
+      document.getElementById('tab-unsent').classList.toggle('text-gray-400', tab !== 'unsent');
+      document.getElementById('tab-sent').classList.toggle('tab-active', tab === 'sent');
+      document.getElementById('tab-sent').classList.toggle('text-blue-600', tab === 'sent');
+      document.getElementById('tab-sent').classList.toggle('text-gray-400', tab !== 'sent');
+      render();
+    }
+
+    /* ---------- actions ---------- */
+    function deleteCard(id) {
+      const d = getDeleted(); d.add(id); saveDeleted(d); render();
+    }
+    function toggleSent(id) {
+      const s = getSent();
+      s.has(id) ? s.delete(id) : s.add(id);
+      saveSent(s); render();
+    }
+    function restoreAll() {
+      localStorage.removeItem(DELETED_KEY); render();
+    }
+
+    /* ---------- build filter buttons from data ---------- */
+    function buildFilterButtons() {
+      const btnBase = 'filter-btn px-3 py-1.5 rounded-full text-sm font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition';
+
+      const locs = [...new Set(SERVICES.map(s => s.location).filter(Boolean))].sort();
+      document.getElementById('loc-buttons').innerHTML = locs.map(l =>
+        `<button onclick="setLocation('${l}')" data-val="${l}" class="${btnBase} loc-btn">${l}</button>`
+      ).join(' ');
+
+      const cats = [...new Set(SERVICES.map(s => s.category))].sort();
+      document.getElementById('cat-buttons').innerHTML = cats.map(c =>
+        `<button onclick="setCategory('${c}')" data-val="${c}" class="${btnBase} cat-btn">${c}</button>`
+      ).join(' ');
+    }
+
+    /* ---------- init ---------- */
+    fetch('lib/services.json')
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(data => {
+        SERVICES = data;
+        document.getElementById('totalCount').textContent = SERVICES.length;
+        buildFilterButtons();
+        render();
+      })
+      .catch(() => {
+        document.getElementById('grid').innerHTML =
+          '<div class="col-span-3 text-center py-20 text-red-400 text-sm">⚠️ lib/services.json が読み込めません。ローカルサーバー経由で開いてください。</div>';
+      });
+  </script>
+</body>
+</html>
